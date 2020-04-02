@@ -60,9 +60,3 @@ func main() {
 	http.ListenAndServe(":8080", proxy)
 
 }
-
-//func waitForSignal() {
-//	ch := make(chan os.Signal, 1)
-//	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-//	<-ch
-//}

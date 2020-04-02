@@ -244,10 +244,10 @@ func (h *Handler) StartCleaner() {
 						continue
 					}
 					if numResponses < 2 {
+						h.log.
+							WithTransactionID(r.req.tid).
+							Error("Less than 2 responses were recorded; one the services might be faulty")
 						h.store.removeRecord(r.req.stamp)
-						req := r.req.req
-						reqInfo := fmt.Sprintf("%s:%s%s", req.Method, req.Host, req.URL.String())
-						h.log.Errorf("request %s received less than two responses; one of the services might be faulty", reqInfo)
 					}
 				}
 			case <-quit:

@@ -46,7 +46,12 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 
-		rec := h.store.NewRecord(*req)
+		rec, err := h.store.NewRecord(*req)
+		if err != nil {
+			rw.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(rw, err)
+			return
+		}
 
 		// @todo - log body if it is not empty
 		h.log.
@@ -114,7 +119,9 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 		body := io.TeeReader(resp.Body, &bufBody)
 		_, err = io.Copy(rw, body)
 		if err != nil {
-
+			rw.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(rw, err)
+			return
 		}
 
 		// copy trailer
@@ -126,7 +133,8 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 
 		// add response to record
 		rec.addResponse(Response{
-			body: bufBody.Bytes(),
+			body:    bufBody.Bytes(),
+			headers: resp.Header,
 		})
 
 		close(done)
@@ -162,7 +170,6 @@ func (h *Handler) StartRepeater() {
 				h.log.Errorf("Could not send repeater request", err)
 				return
 			}
-			defer resp.Body.Close()
 
 			br, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
@@ -177,8 +184,11 @@ func (h *Handler) StartRepeater() {
 				h.log.Errorf("Could not read body of repeater response", err)
 			}
 			rec.addResponse(Response{
-				body: respBody,
+				body:    respBody,
+				headers: resp.Header,
 			})
+
+			resp.Body.Close()
 
 		}
 	}()

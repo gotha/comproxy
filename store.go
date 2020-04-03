@@ -32,12 +32,15 @@ type Record struct {
 	stamp     string
 }
 
-func NewRecord(req http.Request) *Record {
+func NewRecord(req http.Request) (*Record, error) {
 
 	t := time.Now().UnixNano()
 	stamp := fmt.Sprintf("%d:%s%s", t, req.Host, req.URL.String())
 	hasher := md5.New()
-	hasher.Write([]byte(stamp))
+	_, err := hasher.Write([]byte(stamp))
+	if err != nil {
+		return nil, err
+	}
 	hash := hex.EncodeToString(hasher.Sum(nil))
 
 	tid := req.Header.Get("X-Request-Id")
@@ -51,7 +54,7 @@ func NewRecord(req http.Request) *Record {
 		reqTime:   t,
 		tid:       tid,
 		stamp:     hash,
-	}
+	}, nil
 }
 
 func (r *Record) addResponse(resp Response) {
@@ -72,10 +75,10 @@ func NewStore() Store {
 	return s
 }
 
-func (s *Store) NewRecord(req http.Request) *Record {
-	rec := NewRecord(req)
+func (s *Store) NewRecord(req http.Request) (*Record, error) {
+	rec, err := NewRecord(req)
 	s.addRecord(rec)
-	return rec
+	return rec, err
 }
 
 func (s *Store) addRecord(r *Record) {
@@ -85,13 +88,6 @@ func (s *Store) addRecord(r *Record) {
 	s.data[r.stamp] = r
 
 	newRecords <- r
-}
-
-func (s *Store) getRecord(hash string) *Record {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	return s.data[hash]
 }
 
 func (s *Store) removeRecord(hash string) {

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -25,20 +24,20 @@ type Services struct {
 }
 
 type Handler struct {
-	log       *logger.UPPLogger
-	Services  Services
-	Requests  chan StampedRequest
-	Responses chan StampedResponse
-	store     Store
+	log      *logger.UPPLogger
+	Services Services
+	Requests chan Record
+	Records  chan Record
+	store    Store
 }
 
 func NewHandler(s Services, log *logger.UPPLogger) Handler {
 	return Handler{
-		Services:  s,
-		log:       log,
-		Requests:  make(chan StampedRequest, 1000),
-		Responses: make(chan StampedResponse, 1000),
-		store:     NewStore(),
+		Services: s,
+		log:      log,
+		Requests: make(chan Record, 1000),
+		Records:  make(chan Record, 1000),
+		store:    NewStore(),
 	}
 }
 
@@ -51,15 +50,14 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 
-		streq := NewStampedRequest(*req)
-		// @todo - log body if the request is POST
-		h.log.
-			WithFields(streq.GetProperties()).
-			WithTransactionID(streq.tid).
-			Info("Received request")
+		rec := h.store.NewRecord(*req)
 
-		h.Requests <- streq
-		h.store.addRequest(streq)
+		// @todo - log body if it is not empty
+		h.log.
+			WithField("method", req.Method).
+			WithField("url", req.URL.String()).
+			WithTransactionID(rec.tid).
+			Info("Received request")
 
 		r, err := copyRequest(*req)
 		if err != nil {
@@ -80,18 +78,11 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 			fmt.Fprint(rw, err)
 			return
 		}
-
-		br, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			rw.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(rw, err)
-			return
-		}
+		defer resp.Body.Close()
 
 		// write headers
 		host, _, _ := net.SplitHostPort(req.RemoteAddr)
 		rw.Header().Set("X-Forwarded-For", host)
-
 		for key, values := range resp.Header {
 			for _, value := range values {
 				rw.Header().Set(key, value)
@@ -122,8 +113,13 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 
 		// write body
 		rw.WriteHeader(resp.StatusCode)
-		reader := bytes.NewReader(br)
-		io.Copy(rw, reader)
+
+		var bufBody bytes.Buffer
+		body := io.TeeReader(resp.Body, &bufBody)
+		_, err = io.Copy(rw, body)
+		if err != nil {
+
+		}
 
 		// copy trailer
 		for k, values := range resp.Trailer {
@@ -132,15 +128,10 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 			}
 		}
 
-		// writte response to chan
-		streader := bytes.NewReader(br)
-		respBody, err := ioutil.ReadAll(streader)
-		if err != nil {
-			log.Fatal(err)
-		}
-		stresp := NewStampedResponse(respBody, resp.Header, streq)
-		h.Responses <- stresp
-		h.store.addResponse(stresp)
+		// add response to record
+		rec.addResponse(Response{
+			body: bufBody.Bytes(),
+		})
 
 		close(done)
 
@@ -156,9 +147,9 @@ func (h *Handler) StartRepeater() {
 	}
 
 	go func() {
-		for streq := range h.Requests {
+		for rec := range newRecords {
 
-			r, err := copyRequest(streq.req)
+			r, err := copyRequest(rec.req)
 			if err != nil {
 				h.log.Errorf("Could not copy request", err)
 				return
@@ -175,6 +166,7 @@ func (h *Handler) StartRepeater() {
 				h.log.Errorf("Could not send repeater request", err)
 				return
 			}
+			defer resp.Body.Close()
 
 			br, err := ioutil.ReadAll(resp.Body)
 			if err != nil {
@@ -182,15 +174,15 @@ func (h *Handler) StartRepeater() {
 				return
 			}
 
-			// writte response to chan
+			// write response to chan
 			streader := bytes.NewReader(br)
 			respBody, err := ioutil.ReadAll(streader)
 			if err != nil {
 				h.log.Errorf("Could not read body of repeater response", err)
 			}
-			stresp := NewStampedResponse(respBody, resp.Header, streq)
-			h.Responses <- stresp
-			h.store.addResponse(stresp)
+			rec.addResponse(Response{
+				body: respBody,
+			})
 
 		}
 	}()
@@ -198,28 +190,34 @@ func (h *Handler) StartRepeater() {
 
 func (h *Handler) StartComparer() {
 	go func() {
-		for resp := range h.Responses {
+		for rec := range newResponses {
 
-			record := h.store.getRecord(resp.stamp)
 			h.log.
-				WithTransactionID(record.req.tid).
+				WithTransactionID(rec.tid).
 				Info("Received response")
 
-			if len(record.responses) == 2 {
-
-				b1 := string(record.responses[0].body)
-				b2 := string(record.responses[1].body)
-				if b1 != b2 {
-					h.log.
-						WithTransactionID(record.req.tid).
-						Error("Different results were returned")
-					continue
-				}
-
-				h.log.
-					WithTransactionID(record.req.tid).
-					Debug("results were idential")
+			if len(rec.responses) < 2 {
+				continue
 			}
+
+			b1 := string(rec.responses[0].body)
+			b2 := string(rec.responses[1].body)
+			if b1 != b2 {
+				h.log.
+					WithTransactionID(rec.tid).
+					Error("Different results were returned")
+				continue
+			}
+
+			h.log.
+				WithTransactionID(rec.tid).
+				Debug("results were idential")
+
+			h.store.removeRecord(rec.stamp)
+			h.log.
+				WithTransactionID(rec.tid).
+				Debug("Removing record since responses were compared")
+
 		}
 	}()
 }
@@ -236,18 +234,18 @@ func (h *Handler) StartCleaner() {
 				records := h.store.getRecordsOlderThan(since)
 
 				h.log.Debugf("Cleaner found %d records older than 5 sec", len(records))
-				for _, r := range records {
-					numResponses := len(r.responses)
+				for _, rec := range records {
+					numResponses := len(rec.responses)
 					if numResponses == 2 {
-						h.store.removeRecord(r.req.stamp)
+						h.store.removeRecord(rec.stamp)
 						h.log.Debug("Removed old record with 2 responses")
 						continue
 					}
 					if numResponses < 2 {
 						h.log.
-							WithTransactionID(r.req.tid).
+							WithTransactionID(rec.tid).
 							Error("Less than 2 responses were recorded; one the services might be faulty")
-						h.store.removeRecord(r.req.stamp)
+						h.store.removeRecord(rec.stamp)
 					}
 				}
 			case <-quit:

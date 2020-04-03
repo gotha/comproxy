@@ -11,115 +11,103 @@ import (
 	"github.com/dchest/uniuri"
 )
 
-type StampedRequest struct {
-	req          http.Request
-	stamp        string
-	timeReceived int64
-	tid          string
+var newRecords chan (*Record)
+var newResponses chan (*Record)
+
+func init() {
+	newRecords = make(chan *Record, 1000)
+	newResponses = make(chan *Record, 1000)
 }
 
-func NewStampedRequest(r http.Request) StampedRequest {
+type Response struct {
+	body    []byte
+	headers http.Header
+}
+
+type Record struct {
+	req       http.Request
+	responses []Response
+	reqTime   int64
+	tid       string
+	stamp     string
+}
+
+func NewRecord(req http.Request) *Record {
+
 	t := time.Now().UnixNano()
-	stamp := fmt.Sprintf("%d:%s%s", t, r.Host, r.URL.String())
+	stamp := fmt.Sprintf("%d:%s%s", t, req.Host, req.URL.String())
 	hasher := md5.New()
 	hasher.Write([]byte(stamp))
 	hash := hex.EncodeToString(hasher.Sum(nil))
 
-	tid := r.Header.Get("X-Request-Id")
+	tid := req.Header.Get("X-Request-Id")
 	if tid == "" {
 		tid = fmt.Sprintf("tid_%s", uniuri.NewLen(16))
 	}
 
-	return StampedRequest{
-		req:          r,
-		stamp:        hash,
-		timeReceived: t,
-		tid:          tid,
+	return &Record{
+		req:       req,
+		responses: make([]Response, 0),
+		reqTime:   t,
+		tid:       tid,
+		stamp:     hash,
 	}
 }
 
-func (sr *StampedRequest) GetDescr() string {
-	return fmt.Sprintf("%s:%s%s", sr.req.Method, sr.req.Host, sr.req.URL.String())
-}
+func (r *Record) addResponse(resp Response) {
+	r.responses = append(r.responses, resp)
 
-func (sr *StampedRequest) GetProperties() map[string]interface{} {
-	return map[string]interface{}{
-		"method": sr.req.Method,
-		"host":   sr.req.Host,
-		"uri":    sr.req.URL.String(),
-	}
-}
-
-type StampedResponse struct {
-	body    []byte
-	headers http.Header
-	stamp   string
-}
-
-func NewStampedResponse(b []byte, h http.Header, req StampedRequest) StampedResponse {
-	return StampedResponse{
-		body:    b,
-		headers: h,
-		stamp:   req.stamp,
-	}
-}
-
-type Record struct {
-	req       StampedRequest
-	responses []StampedResponse
+	newResponses <- r
 }
 
 type Store struct {
-	data map[string]Record
+	data map[string]*Record
 	mtx  *sync.Mutex
 }
 
 func NewStore() Store {
 	s := Store{}
-	s.data = make(map[string]Record)
+	s.data = make(map[string]*Record)
 	s.mtx = &sync.Mutex{}
 	return s
 }
 
-func (s *Store) addRequest(sr StampedRequest) {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	s.data[sr.stamp] = Record{
-		req: sr,
-	}
+func (s *Store) NewRecord(req http.Request) *Record {
+	rec := NewRecord(req)
+	s.addRecord(rec)
+	return rec
 }
 
-func (s *Store) addResponse(sr StampedResponse) {
+func (s *Store) addRecord(r *Record) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	record := s.data[sr.stamp]
-	record.responses = append(record.responses, sr)
-	s.data[sr.stamp] = record
+	s.data[r.stamp] = r
+
+	newRecords <- r
 }
 
-func (s *Store) removeRecord(stamp string) {
+func (s *Store) getRecord(hash string) *Record {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	delete(s.data, stamp)
+	return s.data[hash]
 }
 
-func (s *Store) getRecord(stamp string) Record {
+func (s *Store) removeRecord(hash string) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	return s.data[stamp]
+	delete(s.data, hash)
 }
 
-func (s *Store) getRecordsOlderThan(t int64) []Record {
+func (s *Store) getRecordsOlderThan(t int64) []*Record {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
 
-	retval := make([]Record, 0)
+	retval := make([]*Record, 0)
 	for _, r := range s.data {
-		if r.req.timeReceived < t {
+		if r.reqTime < t {
 			retval = append(retval, r)
 		}
 	}

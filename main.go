@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/Financial-Times/go-logger/v2"
@@ -23,6 +24,13 @@ func main() {
 		Value:  "INFO",
 		Desc:   "Logging level (DEBUG, INFO, WARN, ERROR)",
 		EnvVar: "LOG_LEVEL",
+	})
+
+	appPort := app.String(cli.StringOpt{
+		Name:   "appPort",
+		Value:  "9999",
+		Desc:   "Port to run the servicej on",
+		EnvVar: "APP_PORT",
 	})
 
 	prodServiceURL := app.String(cli.StringOpt{
@@ -57,6 +65,6 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	http.ListenAndServe(":8080", proxy)
+	http.ListenAndServe(fmt.Sprintf(":%s", *appPort), proxy)
 
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/Financial-Times/go-logger/v2"
 	cli "github.com/jawher/mow.cli"
@@ -65,6 +66,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	http.ListenAndServe(fmt.Sprintf(":%s", *appPort), proxy)
+
+	srv := &http.Server{
+		Addr:         fmt.Sprintf(":%s", *appPort),
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	http.HandleFunc("/", proxy)
+	srv.SetKeepAlivesEnabled(false)
+	err = srv.ListenAndServe()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 }

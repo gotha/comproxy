@@ -26,8 +26,6 @@ type Services struct {
 type Handler struct {
 	log      *logger.UPPLogger
 	Services Services
-	Requests chan Record
-	Records  chan Record
 	store    Store
 }
 
@@ -35,8 +33,6 @@ func NewHandler(s Services, log *logger.UPPLogger) Handler {
 	return Handler{
 		Services: s,
 		log:      log,
-		Requests: make(chan Record, 1000),
-		Records:  make(chan Record, 1000),
 		store:    NewStore(),
 	}
 }

@@ -2,8 +2,17 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"io"
+	"io/ioutil"
+	"log"
 	"net/http"
+)
+
+type key string
+
+const (
+	ReqBodyKey key = "reqBody"
 )
 
 // ResponseReader - replaces ResponseWriter with ResponseWriterWithValue and when written stores the value of the response to val property
@@ -39,4 +48,29 @@ func (rw ResponseWriterWithValue) Header() http.Header {
 func (rw ResponseWriterWithValue) WriteHeader(statusCode int) {
 	rw.StatusCode = statusCode
 	rw.orig.WriteHeader(statusCode)
+}
+
+// RequestBodyReader - reads body and adds it into the request context
+func RequestBodyReader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+
+		var body string
+		if req.Body != nil {
+
+			var buf1, buf2 bytes.Buffer
+			w := io.MultiWriter(&buf1, &buf2)
+
+			if _, err := io.Copy(w, req.Body); err != nil {
+				log.Fatal(err)
+			}
+
+			reader := bytes.NewReader(buf1.Bytes())
+			req.Body = ioutil.NopCloser(reader)
+			body = buf2.String()
+		}
+
+		reqWithBody := req.WithContext(context.WithValue(req.Context(), ReqBodyKey, body))
+
+		next.ServeHTTP(rw, reqWithBody)
+	})
 }

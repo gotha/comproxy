@@ -37,6 +37,8 @@ func main() {
 	handler = proxy.NewHandler(handler, c.ProdServiceURL)
 	handler = proxy.ResponseReader(handler)
 	handler = proxy.RequestLoggger(handler, log)
+	handler = proxy.RequestBodyReader(handler)
+	handler = proxy.TransactionHandler(handler)
 
 	http.Handle("/", handler)
 

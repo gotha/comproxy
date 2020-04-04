@@ -1,13 +1,14 @@
 package comparer
 
 import (
+	"bytes"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 
 	httpclient "github.com/gotha/comproxy/pkg/http"
-	"github.com/jinzhu/copier"
+	"github.com/gotha/comproxy/pkg/proxy"
 )
 
 var repeaterChan (chan ReqResponses)
@@ -29,22 +30,29 @@ func StartRepeater(URL *url.URL) {
 	go func() {
 		for rr := range bridgeChan {
 
-			fmt.Printf("%+v\n", "I have to repeat request")
-			fmt.Printf("%+v\n", rr.tid)
+			fmt.Printf("I have to repeat request: %+v\n", rr.tid)
 
-			req, err := http.NewRequest(rr.req.Method, rr.req.URL.String())
+			// create new request
+			body := rr.req.Context().Value(proxy.ReqBodyKey).(string)
+			bodyReader := bytes.NewReader([]byte(body))
+			req, err := http.NewRequest(rr.req.Method, rr.req.URL.String(), bodyReader)
+			if err != nil {
+				fmt.Printf("%+v\n", err)
+				panic("We cannot repeat the request")
+			}
 
-			var req http.Request
-			copier.Copy(&req, &rr.req)
+			req.Header = rr.req.Header
 
 			// modify request to go to new target
 			req.Host = URL.Host
 			req.URL.Host = URL.Host
 			req.URL.Scheme = URL.Scheme
 			req.RequestURI = ""
+			// @todo - check if I am not missing to copy something
 
+			// make request
 			httpClient := httpclient.NewHTTPClient()
-			resp, err := httpClient.Do(&req)
+			resp, err := httpClient.Do(req)
 			if err != nil {
 
 				fmt.Printf("%+v\n", err)
@@ -55,7 +63,7 @@ func StartRepeater(URL *url.URL) {
 			}
 			defer resp.Body.Close()
 
-			body, err := ioutil.ReadAll(resp.Body)
+			respBody, err := ioutil.ReadAll(resp.Body)
 
 			rrs := ReqResponses{
 				tid: rr.tid,
@@ -63,7 +71,7 @@ func StartRepeater(URL *url.URL) {
 				responses: []Response{
 					rr.response,
 					Response{
-						body:       string(body),
+						body:       string(respBody),
 						statusCode: resp.StatusCode,
 					},
 				},

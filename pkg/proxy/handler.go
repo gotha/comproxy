@@ -1,79 +1,29 @@
-package main
+package proxy
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
-	"github.com/Financial-Times/go-logger/v2"
+	_ "github.com/davecgh/go-spew/spew"
+	httpclient "github.com/gotha/comproxy/pkg/http"
 )
 
-type Service struct {
-	url string
-}
-
-type Services struct {
-	Primary   Service
-	Candidate Service
-}
-
-type Handler struct {
-	log      *logger.UPPLogger
-	Services Services
-	store    Store
-}
-
-func NewHandler(s Services, log *logger.UPPLogger) Handler {
-	return Handler{
-		Services: s,
-		log:      log,
-		store:    NewStore(),
-	}
-}
-
-func (h *Handler) GetProxy() (http.HandlerFunc, error) {
-
-	URL, err := url.Parse(h.Services.Primary.url)
-	if err != nil {
-		return nil, err
-	}
+func NewHandler(next http.Handler, URL *url.URL) http.Handler {
 
 	return http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 
-		rec, err := h.store.NewRecord(*req)
-		if err != nil {
-			rw.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(rw, err)
-			return
-		}
+		// modify request to go to new target
+		req.Host = URL.Host
+		req.URL.Host = URL.Host
+		req.URL.Scheme = URL.Scheme
+		req.RequestURI = ""
 
-		// @todo - log body if it is not empty
-		h.log.
-			WithField("method", req.Method).
-			WithField("url", req.URL.String()).
-			WithTransactionID(rec.tid).
-			Info("Received request")
-
-		r, err := copyRequest(*req)
-		if err != nil {
-			rw.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(rw, err)
-			return
-		}
-
-		r.Host = URL.Host
-		r.URL.Host = URL.Host
-		r.URL.Scheme = URL.Scheme
-		r.RequestURI = ""
-
-		httpClient := NewHTTPClient()
-		resp, err := httpClient.Do(&r)
+		httpClient := httpclient.NewHTTPClient()
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			rw.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(rw, err)
@@ -81,7 +31,7 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 		}
 		defer resp.Body.Close()
 
-		// write headers
+		// write response headers
 		host, _, _ := net.SplitHostPort(req.RemoteAddr)
 		rw.Header().Set("X-Forwarded-For", host)
 		for key, values := range resp.Header {
@@ -89,19 +39,6 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 				rw.Header().Set(key, value)
 			}
 		}
-
-		// we do this do handle streams
-		done := make(chan bool)
-		go func() {
-			for {
-				select {
-				case <-time.Tick(10 * time.Millisecond):
-					rw.(http.Flusher).Flush()
-				case <-done:
-					return
-				}
-			}
-		}()
 
 		// send trailer header
 		trailerKeys := []string{}
@@ -112,12 +49,9 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 			rw.Header().Set("Trailer", strings.Join(trailerKeys, ","))
 		}
 
-		// write body
+		// write body and copy content so it can be added to store
 		rw.WriteHeader(resp.StatusCode)
-
-		var bufBody bytes.Buffer
-		body := io.TeeReader(resp.Body, &bufBody)
-		_, err = io.Copy(rw, body)
+		_, err = io.Copy(rw, resp.Body)
 		if err != nil {
 			rw.WriteHeader(http.StatusInternalServerError)
 			fmt.Fprint(rw, err)
@@ -131,17 +65,11 @@ func (h *Handler) GetProxy() (http.HandlerFunc, error) {
 			}
 		}
 
-		// add response to record
-		rec.addResponse(Response{
-			body:    bufBody.Bytes(),
-			headers: resp.Header,
-		})
-
-		close(done)
-
-	}), nil
+		next.ServeHTTP(rw, req)
+	})
 }
 
+/*
 func (h *Handler) StartRepeater() {
 
 	URL, err := url.Parse(h.Services.Candidate.url)
@@ -153,19 +81,18 @@ func (h *Handler) StartRepeater() {
 	go func() {
 		for rec := range newRecords {
 
-			r, err := copyRequest(rec.req)
-			if err != nil {
-				h.log.Errorf("Could not copy request", err)
-				return
-			}
+			h.log.Debug("Received new record; Repeating request to candidate service")
 
-			r.Host = URL.Host
-			r.URL.Host = URL.Host
-			r.URL.Scheme = URL.Scheme
-			r.RequestURI = ""
+			var req http.Request
+			copier.Copy(&req, &rec.req)
+
+			req.Host = URL.Host
+			req.URL.Host = URL.Host
+			req.URL.Scheme = URL.Scheme
+			req.RequestURI = ""
 
 			httpClient := NewHTTPClient()
-			resp, err := httpClient.Do(&r)
+			resp, err := httpClient.Do(&req)
 			if err != nil {
 				h.log.Errorf("Could not send repeater request", err)
 				return
@@ -194,6 +121,7 @@ func (h *Handler) StartRepeater() {
 	}()
 }
 
+/*
 func (h *Handler) StartComparer() {
 	go func() {
 		for rec := range newResponses {
@@ -227,7 +155,9 @@ func (h *Handler) StartComparer() {
 		}
 	}()
 }
+*/
 
+/**
 func (h *Handler) StartCleaner() {
 	ticker := time.NewTicker(5 * time.Second)
 	quit := make(chan struct{})
@@ -261,35 +191,4 @@ func (h *Handler) StartCleaner() {
 		}
 	}()
 }
-
-func copyRequest(r http.Request) (http.Request, error) {
-
-	buf, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return r, err
-	}
-	bodycp := ioutil.NopCloser(strings.NewReader(string(buf)))
-
-	return http.Request{
-		Body:          bodycp,
-		Method:        r.Method,
-		Proto:         r.Proto,
-		ProtoMajor:    r.ProtoMajor,
-		ProtoMinor:    r.ProtoMinor,
-		ContentLength: r.ContentLength,
-		Header:        r.Header,
-		Trailer:       r.Trailer,
-		Host:          r.Host,
-		URL: &url.URL{
-			Scheme:     r.URL.Scheme,
-			Opaque:     r.URL.Opaque,
-			Host:       r.URL.Host,
-			Path:       r.URL.Path,
-			RawPath:    r.URL.RawPath,
-			ForceQuery: r.URL.ForceQuery,
-			RawQuery:   r.URL.RawQuery,
-			Fragment:   r.URL.Fragment,
-			User:       r.URL.User,
-		},
-	}, nil
-}
+*/

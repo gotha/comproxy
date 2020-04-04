@@ -46,6 +46,7 @@ func (rw ResponseWriterWithValue) Header() http.Header {
 }
 
 func (rw ResponseWriterWithValue) WriteHeader(statusCode int) {
+	// @todo - this doesnt seem to work - fixit
 	rw.StatusCode = statusCode
 	rw.orig.WriteHeader(statusCode)
 }

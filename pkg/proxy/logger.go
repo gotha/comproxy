@@ -28,9 +28,8 @@ func RequestLoggger(next http.Handler, log *logger.UPPLogger) http.Handler {
 func ResponseLogger(next http.Handler, log *logger.UPPLogger, logBody bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 
-		tid := req.Header.Get("X-Request-Id")
+		tid := req.Header.Get(TransactionIDGHeader)
 		var body string
-		// @todo - make this configuration option
 		if logBody == true {
 			body = w.(ResponseWriterWithValue).Val.String()
 		}

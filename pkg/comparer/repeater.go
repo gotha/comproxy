@@ -2,11 +2,11 @@ package comparer
 
 import (
 	"bytes"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 
+	"github.com/Financial-Times/go-logger/v2"
 	httpclient "github.com/gotha/comproxy/pkg/http"
 	"github.com/gotha/comproxy/pkg/proxy"
 )
@@ -25,20 +25,20 @@ func init() {
 }
 
 // StartRepeater - starts a goroutine that processes requests from bridgeChan
-func StartRepeater(URL *url.URL) {
+func StartRepeater(URL *url.URL, log *logger.UPPLogger, logBody bool) {
 
 	go func() {
 		for rr := range bridgeChan {
 
-			fmt.Printf("I have to repeat request: %+v\n", rr.tid)
+			log.WithTransactionID(rr.tid).Debug("Repeating request")
 
 			// create new request
 			body := rr.req.Context().Value(proxy.ReqBodyKey).(string)
 			bodyReader := bytes.NewReader([]byte(body))
 			req, err := http.NewRequest(rr.req.Method, rr.req.URL.String(), bodyReader)
 			if err != nil {
-				fmt.Printf("%+v\n", err)
-				panic("We cannot repeat the request")
+				log.WithTransactionID(rr.tid).Errorf("Unable to create repeat request")
+				continue
 			}
 
 			req.Header = rr.req.Header
@@ -54,12 +54,8 @@ func StartRepeater(URL *url.URL) {
 			httpClient := httpclient.NewHTTPClient()
 			resp, err := httpClient.Do(req)
 			if err != nil {
-
-				fmt.Printf("%+v\n", err)
-				panic("HOI")
-				//rw.WriteHeader(http.StatusInternalServerError)
-				//fmt.Fprint(rw, err)
-				//return
+				log.WithTransactionID(rr.tid).Errorf("Unable to execute repeat request")
+				continue
 			}
 			defer resp.Body.Close()
 
@@ -76,6 +72,17 @@ func StartRepeater(URL *url.URL) {
 					},
 				},
 			}
+
+			var logRespBody string
+			if logBody == true {
+				logRespBody = string(respBody)
+			}
+			log.
+				WithField("method", req.Method).
+				WithField("url", req.URL.String()).
+				WithField("body", logRespBody).
+				WithTransactionID(rr.tid).
+				Info("Returned response")
 
 			repeaterChan <- rrs
 		}

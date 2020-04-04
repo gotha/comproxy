@@ -42,7 +42,7 @@ func main() {
 
 	http.Handle("/", handler)
 
-	comparer.StartRepeater(c.CandidateServiceURL)
+	comparer.StartRepeater(c.CandidateServiceURL, log, c.LogResponseBody)
 	comparer.StartComparingResponses(log)
 
 	srv := &http.Server{

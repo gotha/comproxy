@@ -11,7 +11,6 @@ func StartComparingResponses(log *logger.UPPLogger) {
 	go func() {
 
 		for rrs := range repeaterChan {
-			fmt.Printf("Got repeated response for tid:%+v\n", rrs.tid)
 
 			logLine := log.WithTransactionID(rrs.tid)
 

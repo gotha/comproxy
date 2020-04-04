@@ -30,7 +30,7 @@ type ReqResponse struct {
 func Bridge(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 
-		tid := req.Header.Get("X-Request-Id")
+		tid := req.Header.Get(proxy.TransactionIDGHeader)
 		body := w.(proxy.ResponseWriterWithValue).Val.String()
 		statusCode := w.(proxy.ResponseWriterWithValue).StatusCode
 

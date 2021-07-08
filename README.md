@@ -9,7 +9,7 @@ There is no UI, put your logs in something like Splunk and setup alarms if that 
 ### Build
 
 ```
-go build
+make build
 ```
 
 ### How to run
@@ -18,6 +18,6 @@ go build
 LOG_LEVEL=DEBUG \
   PROD_SERVICE_URL="http://localhost:8081" \
   CANDIDATE_SERVICE_URL="http://localhost:8082" \
-  ./comproxy
+  ./bin/comproxy
 ```
 
